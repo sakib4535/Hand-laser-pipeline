@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FLUX · Forensics Lab</title>
+  <style>
+    /* ---------- Reset & base ---------- */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      height: 100%;
+      background: #0b0d14;
+      overflow: hidden;
+      font-family: 'Courier New', 'Segoe UI', monospace;
+      color: #c8d0e0;
+      user-select: none;
+    }
+
+    /* ---------- Main canvas ---------- */
+    #wrap {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      z-index: 1;
+    }
+    video { display: none; }
+    canvas#cv {
+      max-width: 100vw;
+      max-height: 100vh;
+      background: #0b0d14;
+      display: block;
+      border-radius: 8px;
+      box-shadow: 0 0 40px rgba(0, 180, 255, 0.08);
+    }
+
+    /* ---------- Grid overlay (CSS only, for style) ---------- */
+    #wrap::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0, 180, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 180, 255, 0.02) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 2;
+      border-radius: 8px;
+    }
+
+    /* ---------- Top dashboard ---------- */
+    #dashboard {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    #dashboard > * {
+      pointer-events: auto;
+    }
+    .panel {
+      background: rgba(12, 16, 28, 0.82);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(0, 180, 255, 0.15);
+      border-radius: 10px;
+      padding: 6px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+    }
+    .panel-left {
+      flex: 1 1 auto;
+      min-width: 200px;
+    }
+    .panel-right {
+      flex: 0 1 auto;
+      gap: 6px;
+    }
+
+    .logo {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #0cf;
+      text-shadow: 0 0 20px rgba(0, 204, 255, 0.3);
+      margin-right: 4px;
+    }
+    .logo small {
+      font-size: 12px;
+      color: #6a7a8a;
+      letter-spacing: 1px;
+      font-weight: 300;
+    }
+
+    .ctrl-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: #8a9aaa;
+    }
+    .ctrl-group label {
+      white-space: nowrap;
+      letter-spacing: 0.5px;
+    }
+    select, button {
+      background: rgba(0, 180, 255, 0.06);
+      border: 1px solid rgba(0, 180, 255, 0.15);
+      color: #c8d0e0;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: 0.2s;
+      font-family: inherit;
+    }
+    select:hover, button:hover {
+      background: rgba(0, 180, 255, 0.12);
+      border-color: #0cf;
+      color: #fff;
+    }
+    select:focus, button:focus {
+      outline: none;
+      border-color: #0cf;
+      box-shadow: 0 0 12px rgba(0, 204, 255, 0.15);
+    }
+    .toggle {
+      background: rgba(0, 204, 255, 0.08);
+      border-color: rgba(0, 204, 255, 0.2);
+    }
+    .toggle.active {
+      background: rgba(0, 204, 255, 0.15);
+      border-color: #0cf;
+      box-shadow: 0 0 12px rgba(0, 204, 255, 0.15);
+    }
+    .badge {
+      font-size: 10px;
+      color: #5a6a7a;
+      padding: 2px 10px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.04);
+      letter-spacing: 0.5px;
+    }
+    #fps {
+      min-width: 60px;
+      text-align: center;
+    }
+
+    /* ---------- Error overlay ---------- */
+    #err {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      text-align: center;
+      padding: 20px;
+      background: rgba(0,0,0,0.85);
+      z-index: 30;
+    }
+    #err h2 { color: #ff4466; font-weight: 300; letter-spacing: 2px; }
+    #err p { color: #889; margin-top: 8px; font-size: 14px; }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 720px) {
+      #dashboard { top: 8px; left: 8px; right: 8px; gap: 6px; }
+      .panel { padding: 4px 10px; gap: 6px; border-radius: 8px; }
+      .logo { font-size: 16px; }
+      .ctrl-group { font-size: 10px; }
+      select, button { font-size: 9px; padding: 2px 6px; }
+      .badge { font-size: 8px; padding: 1px 6px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ====== MAIN WRAPPER ====== -->
+  <div id="wrap">
+    <video id="cam" playsinline></video>
+    <canvas id="cv"></canvas>
+  </div>
+
+  <!-- ====== DASHBOARD ====== -->
+  <div id="dashboard">
+    <div class="panel panel-left">
+      <span class="logo">◈ FLUX <small>forensics</small></span>
+      <div class="ctrl-group">
+        <label for="modeSelect">Mode</label>
+        <select id="modeSelect">
+          <option value="laser">Laser</option>
+          <option value="write" selected>Write</option>
+          <option value="mark">Mark</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <label for="brushColor">Color</label>
+        <select id="brushColor">
+          <option value="shape">Shape‑shift</option>
+          <option value="cyan">Cyan</option>
+          <option value="magenta">Magenta</option>
+          <option value="lime">Lime</option>
+          <option value="gold">Gold</option>
+        </select>
+      </div>
+    </div>
+    <div class="panel panel-right">
+      <div class="ctrl-group">
+        <button id="clearBtn" title="Clear drawing">✕ Clear</button>
+        <button id="exportBtn" title="Export as PNG">⬇ Export</button>
+        <button id="toggleParticles" class="toggle active">✦ Particles</button>
+      </div>
+      <span class="badge" id="fps">FPS: --</span>
+    </div>
+  </div>
+
+  <!-- ====== ERROR ====== -->
+  <div id="err"><div><h2>⚠ Camera error</h2><p id="errmsg"></p></div></div>
+
+  <!-- ====== SCRIPT ====== -->
+  <script type="importmap">
+    {
+      "imports": {
+        "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+      }
+    }
+  </script>
+
+  <script type="module">
+    // ================================================================
+    //  FLUX · Forensics Lab
+    //  - Dual‑hand writing: both hands draw simultaneously
+    //  - Modes: Laser, Write (persistent drawing), Mark (dots)
+    //  - Colour selector: shape‑shift, cyan, magenta, lime, gold
+    //  - Particles toggle, export, clear
+    //  - Police / forensic design with grid overlay
+    // ================================================================
+
+    import { HandLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+
+    // ---- DOM refs ----
+    const video = document.getElementById('cam');
+    const cv = document.getElementById('cv');
+    const ctx = cv.getContext('2d');
+    const modeSelect = document.getElementById('modeSelect');
+    const brushColorSelect = document.getElementById('brushColor');
+    const clearBtn = document.getElementById('clearBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    const toggleParticlesBtn = document.getElementById('toggleParticles');
+    const fpsEl = document.getElementById('fps');
+
+    // ---- Constants ----
+    const TIPS = [4, 8, 12, 16, 20];
+    const PIPS = { 4: 3, 8: 6, 12: 10, 16: 14, 20: 18 };
+    const HAND_CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [5,9],[9,10],[10,11],[11,12],
+      [9,13],[13,14],[14,15],[15,16],
+      [13,17],[17,18],[18,19],[19,20],
+      [0,17]
+    ];
+
+    // ---- State ----
+    let landmarker = null;
+    let mode = 'write';         // 'laser', 'write', 'mark'
+    let colorMode = 'shape';    // 'shape', 'cyan', 'magenta', 'lime', 'gold'
+    let showParticles = true;
+    let fixedHue = 180;         // cyan default
+
+    // ---- Drawing canvas (persistent) ----
+    const drawCanvas = document.createElement('canvas');
+    const drawCtx = drawCanvas.getContext('2d');
+
+    // ---- Particle system ----
+    let particles = [];
+    const MAX_PARTICLES = 500;
+
+    class Particle {
+      constructor(x, y, hue) {
+        this.x = x;
+        this.y = y;
+        this.vx = (Math.random() - 0.5) * 2.5;
+        this.vy = (Math.random() - 0.5) * 2.5 - 1.2;
+        this.life = 1.0;
+        this.decay = 0.006 + Math.random() * 0.014;
+        this.size = 2 + Math.random() * 5;
+        this.hue = hue + (Math.random() - 0.5) * 25;
+        this.sat = 85 + Math.random() * 15;
+        this.light = 60 + Math.random() * 30;
+      }
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vy += 0.035;
+        this.life -= this.decay;
+        this.size *= 0.995;
+      }
+      draw(ctx) {
+        const alpha = this.life * 0.75;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = `hsl(${this.hue}, ${this.sat}%, ${this.light}%)`;
+        ctx.shadowColor = `hsla(${this.hue}, 100%, 70%, ${alpha * 0.5})`;
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, Math.max(0.4, this.size), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      }
+      get dead() { return this.life <= 0 || this.size < 0.3; }
+    }
+
+    // ---- Helpers ----
+    function extendedFingers(lm) {
+      const wx = lm[0].x, wy = lm[0].y;
+      const dist = (p) => Math.hypot(p.x - wx, p.y - wy);
+      const out = {};
+      for (const t of TIPS) {
+        out[t] = dist(lm[t]) > dist(lm[PIPS[t]]) * 1.05;
+      }
+      return out;
+    }
+
+    function handShapeHue(lm) {
+      const palm = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
+      let sum = 0, n = 0;
+      for (let i = 0; i < TIPS.length; i++) {
+        for (let j = i+1; j < TIPS.length; j++) {
+          sum += Math.hypot(lm[TIPS[i]].x - lm[TIPS[j]].x, lm[TIPS[i]].y - lm[TIPS[j]].y);
+          n++;
+        }
+      }
+      const spread = (sum / n) / palm;
+      let curl = 0;
+      for (const t of TIPS) curl += Math.hypot(lm[t].x - lm[0].x, lm[t].y - lm[0].y) / palm;
+      curl /= TIPS.length;
+      return ((spread * 180 + curl * 60) % 360 + 360) % 360;
+    }
+
+    function getBrushColor(hue) {
+      switch (colorMode) {
+        case 'cyan':  return 180;
+        case 'magenta': return 300;
+        case 'lime':  return 120;
+        case 'gold':  return 50;
+        default:      return hue; // shape
+      }
+    }
+
+    // ---- Resize drawing canvas to match main canvas ----
+    function resizeDrawCanvas() {
+      const W = cv.width, H = cv.height;
+      if (drawCanvas.width !== W || drawCanvas.height !== H) {
+        drawCanvas.width = W;
+        drawCanvas.height = H;
+        // Copy old content if resizing (we lose it, but we can redraw from scratch – we keep it in memory)
+        // We'll just clear and rely on continuous drawing.
+      }
+    }
+
+    // ---- Drawing functions ----
+    function drawBeam(x1, y1, x2, y2, hue, width, alpha = 1) {
+      const colHue = getBrushColor(hue);
+      ctx.save();
+      ctx.lineCap = 'round';
+      // Glow
+      ctx.strokeStyle = `hsla(${colHue}, 100%, 70%, ${0.15 * alpha})`;
+      ctx.lineWidth = width + 14;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      // Core
+      ctx.strokeStyle = `hsla(${colHue}, 100%, 80%, ${alpha})`;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      // Bright dot at origin
+      ctx.fillStyle = `hsla(${colHue}, 100%, 90%, ${alpha})`;
+      ctx.shadowColor = `hsla(${colHue}, 100%, 70%, ${0.5 * alpha})`;
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(x1, y1, width * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    }
+
+    function drawStroke(x, y, hue, size = 4) {
+      const colHue = getBrushColor(hue);
+      drawCtx.save();
+      drawCtx.lineCap = 'round';
+      drawCtx.lineJoin = 'round';
+      drawCtx.strokeStyle = `hsla(${colHue}, 100%, 75%, 0.9)`;
+      drawCtx.lineWidth = size;
+      drawCtx.shadowColor = `hsla(${colHue}, 100%, 70%, 0.4)`;
+      drawCtx.shadowBlur = 12;
+      // We'll use a simple dot for now – continuous drawing is handled per frame
+      drawCtx.beginPath();
+      drawCtx.arc(x, y, size/2, 0, Math.PI*2);
+      drawCtx.fill();
+      drawCtx.shadowBlur = 0;
+      drawCtx.restore();
+    }
+
+    // ---- Clear drawing ----
+    function clearDrawing() {
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    }
+
+    // ---- Export ----
+    function exportCanvas() {
+      // Combine main canvas and draw canvas
+      const temp = document.createElement('canvas');
+      temp.width = cv.width;
+      temp.height = cv.height;
+      const tCtx = temp.getContext('2d');
+      tCtx.drawImage(cv, 0, 0);        // video + overlays
+      tCtx.drawImage(drawCanvas, 0, 0); // drawing layer
+      const link = document.createElement('a');
+      link.download = `evidence-${Date.now()}.png`;
+      link.href = temp.toDataURL('image/png');
+      link.click();
+    }
+
+    // ---- Particle spawn ----
+    function spawnParticles(x, y, hue, count = 3) {
+      if (!showParticles) return;
+      for (let i = 0; i < count; i++) {
+        if (particles.length >= MAX_PARTICLES) break;
+        particles.push(new Particle(x, y, hue));
+      }
+    }
+
+    function updateParticles() {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].update();
+        if (particles[i].dead) particles.splice(i, 1);
+      }
+    }
+
+    function drawParticles() {
+      for (const p of particles) p.draw(ctx);
+    }
+
+    // ---- Main render ----
+    let frameCount = 0;
+    let lastFpsTime = performance.now();
+    let fps = 0;
+    let hands = [];
+    let hues = [];
+
+    // Store previous positions for continuous drawing
+    let prevPos = {}; // key: handId_fingerIdx => {x, y}
+
+    function render() {
+      const W = cv.width, H = cv.height;
+
+      // ---- Mirror video ----
+      ctx.save();
+      ctx.translate(W, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0, W, H);
+      ctx.restore();
+
+      // ---- Dim ----
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.fillRect(0, 0, W, H);
+
+      // ---- Detect hands ----
+      const res = landmarker.detectForVideo(video, performance.now());
+      hands = res?.landmarks || [];
+      hues = hands.map(handShapeHue);
+
+      // ---- Mirror coords ----
+      const mx = (x) => (1 - x) * W;
+      const my = (y) => y * H;
+
+      // ---- Mode handling ----
+      if (mode === 'laser') {
+        // Laser beams between hands (similar to original)
+        if (hands.length === 2) {
+          const a = hands[0], b = hands[1];
+          const extA = extendedFingers(a);
+          const extB = extendedFingers(b);
+          const hueAvg = (hues[0] + hues[1]) / 2;
+          const activeTips = TIPS.filter(t => extA[t] && extB[t]);
+          for (let i = 0; i < activeTips.length; i++) {
+            const t = activeTips[i];
+            const x1 = mx(a[t].x), y1 = my(a[t].y);
+            const x2 = mx(b[t].x), y2 = my(b[t].y);
+            drawBeam(x1, y1, x2, y2, (hueAvg + i * 30) % 360, 3);
+            spawnParticles((x1+x2)/2, (y1+y2)/2, (hueAvg + i * 30) % 360, 1);
+          }
+          // cross‑weave, palm beam omitted for brevity but can be added
+        }
+        // Also show skeletons for reference
+        for (let i = 0; i < hands.length; i++) {
+          drawSkeleton(hands[i], W, H, hues[i]);
+        }
+      } else if (mode === 'write') {
+        // Dual‑hand writing: each extended finger draws a stroke
+        for (let h = 0; h < hands.length; h++) {
+          const lm = hands[h];
+          const ext = extendedFingers(lm);
+          const hue = hues[h];
+          for (const t of TIPS) {
+            if (ext[t]) {
+              const x = mx(lm[t].x);
+              const y = my(lm[t].y);
+              const key = h + '_' + t;
+              // Draw on persistent canvas
+              drawCtx.save();
+              const col = getBrushColor(hue + (t * 10) % 360);
+              drawCtx.strokeStyle = `hsla(${col}, 100%, 75%, 0.9)`;
+              drawCtx.lineWidth = 4;
+              drawCtx.lineCap = 'round';
+              drawCtx.shadowColor = `hsla(${col}, 100%, 70%, 0.5)`;
+              drawCtx.shadowBlur = 14;
+              if (prevPos[key]) {
+                drawCtx.beginPath();
+                drawCtx.moveTo(prevPos[key].x, prevPos[key].y);
+                drawCtx.lineTo(x, y);
+                drawCtx.stroke();
+              } else {
+                // draw a dot
+                drawCtx.beginPath();
+                drawCtx.arc(x, y, 2.5, 0, Math.PI * 2);
+                drawCtx.fill();
+              }
+              drawCtx.shadowBlur = 0;
+              drawCtx.restore();
+              // update prev
+              prevPos[key] = { x, y };
+              // spawn particles
+              spawnParticles(x, y, hue + (t * 10) % 360, 1);
+            } else {
+              const key = h + '_' + t;
+              delete prevPos[key]; // reset when finger not extended
+            }
+          }
+        }
+        // Draw the drawing canvas on top
+        ctx.drawImage(drawCanvas, 0, 0);
+        // Skeleton overlay
+        for (let i = 0; i < hands.length; i++) {
+          drawSkeleton(hands[i], W, H, hues[i]);
+        }
+      } else if (mode === 'mark') {
+        // Mark mode: place dots when fingertips are extended (like evidence markers)
+        for (let h = 0; h < hands.length; h++) {
+          const lm = hands[h];
+          const ext = extendedFingers(lm);
+          const hue = hues[h];
+          for (const t of TIPS) {
+            if (ext[t]) {
+              const x = mx(lm[t].x);
+              const y = my(lm[t].y);
+              const col = getBrushColor(hue + (t * 10) % 360);
+              // Draw a glowing dot on the persistent canvas
+              drawCtx.save();
+              drawCtx.shadowColor = `hsla(${col}, 100%, 70%, 0.6)`;
+              drawCtx.shadowBlur = 20;
+              drawCtx.fillStyle = `hsla(${col}, 100%, 80%, 0.9)`;
+              drawCtx.beginPath();
+              drawCtx.arc(x, y, 6, 0, Math.PI * 2);
+              drawCtx.fill();
+              // inner bright core
+              drawCtx.shadowBlur = 0;
+              drawCtx.fillStyle = `hsla(${col}, 100%, 95%, 1)`;
+              drawCtx.beginPath();
+              drawCtx.arc(x, y, 2.5, 0, Math.PI * 2);
+              drawCtx.fill();
+              drawCtx.restore();
+              spawnParticles(x, y, hue + (t * 10) % 360, 2);
+            }
+          }
+        }
+        ctx.drawImage(drawCanvas, 0, 0);
+        for (let i = 0; i < hands.length; i++) {
+          drawSkeleton(hands[i], W, H, hues[i]);
+        }
+      }
+
+      // ---- Particles ----
+      updateParticles();
+      drawParticles();
+
+      // ---- FPS ----
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime >= 500) {
+        fps = Math.round(frameCount / ((now - lastFpsTime) / 1000));
+        frameCount = 0;
+        lastFpsTime = now;
+        fpsEl.textContent = `FPS: ${fps}`;
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    // ---- Skeleton helper (reuse) ----
+    function drawSkeleton(lm, W, H, hue) {
+      ctx.save();
+      ctx.strokeStyle = `hsla(${hue}, 80%, 65%, 0.25)`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (const [a, b] of HAND_CONNECTIONS) {
+        ctx.moveTo(lm[a].x * W, lm[a].y * H);
+        ctx.lineTo(lm[b].x * W, lm[b].y * H);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // ---- Resize handler ----
+    function resizeCanvas() {
+      const rect = cv.getBoundingClientRect();
+      // We keep canvas size based on video dimensions
+      if (video.videoWidth && video.videoHeight) {
+        cv.width = video.videoWidth;
+        cv.height = video.videoHeight;
+      } else {
+        cv.width = window.innerWidth;
+        cv.height = window.innerHeight;
+      }
+      // Resize draw canvas
+      resizeDrawCanvas();
+      // Clear drawing if needed? We keep content.
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // ---- UI event listeners ----
+    modeSelect.addEventListener('change', (e) => {
+      mode = e.target.value;
+      // Reset previous positions when switching modes
+      prevPos = {};
+      // If switching to laser, clear drawing? We'll keep it but not draw.
+    });
+
+    brushColorSelect.addEventListener('change', (e) => {
+      colorMode = e.target.value;
+    });
+
+    clearBtn.addEventListener('click', clearDrawing);
+
+    exportBtn.addEventListener('click', exportCanvas);
+
+    toggleParticlesBtn.addEventListener('click', () => {
+      showParticles = !showParticles;
+      toggleParticlesBtn.classList.toggle('active', showParticles);
+      if (!showParticles) particles = [];
+    });
+
+    // ---- Initialization ----
+    async function initModel() {
+      const fileset = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+      );
+      landmarker = await HandLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate: "GPU"
+        },
+        numHands: 2,
+        runningMode: "VIDEO"
+      });
+    }
+
+    async function initCam() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720, facingMode: "user" },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      cv.width = video.videoWidth;
+      cv.height = video.videoHeight;
+      resizeDrawCanvas();
+    }
+
+    // ---- Start ----
+    (async () => {
+      try {
+        await initModel();
+        await initCam();
+        render();
+      } catch (e) {
+        document.getElementById('err').style.display = 'grid';
+        document.getElementById('errmsg').textContent = e.message || String(e);
+        console.error(e);
+      }
+    })();
+
+    console.log('FLUX Forensics Lab ready · dual‑hand writing enabled');
+  </script>
+</body>
+</html>
