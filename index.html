@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>FLUX · Forensics Lab</title>
+  <title>FLUX · Laser Forensics</title>
   <style>
     /* ---------- Reset & base ---------- */
     * {
@@ -198,29 +198,30 @@
     <div class="panel panel-left">
       <span class="logo">◈ FLUX <small>forensics</small></span>
       <div class="ctrl-group">
-        <label for="modeSelect">Mode</label>
-        <select id="modeSelect">
-          <option value="laser">Laser</option>
-          <option value="write" selected>Write</option>
-          <option value="mark">Mark</option>
-        </select>
-      </div>
-      <div class="ctrl-group">
-        <label for="brushColor">Color</label>
-        <select id="brushColor">
+        <label for="beamColor">Beam color</label>
+        <select id="beamColor">
           <option value="shape">Shape‑shift</option>
-          <option value="cyan">Cyan</option>
+          <option value="cyan" selected>Cyan</option>
           <option value="magenta">Magenta</option>
           <option value="lime">Lime</option>
           <option value="gold">Gold</option>
         </select>
       </div>
+      <div class="ctrl-group">
+        <label for="beamStyle">Style</label>
+        <select id="beamStyle">
+          <option value="glow" selected>Glow</option>
+          <option value="solid">Solid</option>
+          <option value="dashed">Dashed</option>
+          <option value="neon">Neon</option>
+        </select>
+      </div>
     </div>
     <div class="panel panel-right">
       <div class="ctrl-group">
-        <button id="clearBtn" title="Clear drawing">✕ Clear</button>
-        <button id="exportBtn" title="Export as PNG">⬇ Export</button>
         <button id="toggleParticles" class="toggle active">✦ Particles</button>
+        <button id="toggleSkeleton" class="toggle active">☰ Skeleton</button>
+        <button id="snapshotBtn">📷 Snap</button>
       </div>
       <span class="badge" id="fps">FPS: --</span>
     </div>
@@ -240,12 +241,11 @@
 
   <script type="module">
     // ================================================================
-    //  FLUX · Forensics Lab
-    //  - Dual‑hand writing: both hands draw simultaneously
-    //  - Modes: Laser, Write (persistent drawing), Mark (dots)
-    //  - Colour selector: shape‑shift, cyan, magenta, lime, gold
-    //  - Particles toggle, export, clear
-    //  - Police / forensic design with grid overlay
+    //  FLUX · Laser Forensics (laser‑only mode)
+    //  - Dual‑hand laser beams between extended fingertips
+    //  - Beam color & style options
+    //  - Particles, skeleton toggle, snapshot
+    //  - Forensic / police aesthetic with grid overlay
     // ================================================================
 
     import { HandLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
@@ -254,11 +254,11 @@
     const video = document.getElementById('cam');
     const cv = document.getElementById('cv');
     const ctx = cv.getContext('2d');
-    const modeSelect = document.getElementById('modeSelect');
-    const brushColorSelect = document.getElementById('brushColor');
-    const clearBtn = document.getElementById('clearBtn');
-    const exportBtn = document.getElementById('exportBtn');
+    const beamColorSelect = document.getElementById('beamColor');
+    const beamStyleSelect = document.getElementById('beamStyle');
     const toggleParticlesBtn = document.getElementById('toggleParticles');
+    const toggleSkeletonBtn = document.getElementById('toggleSkeleton');
+    const snapshotBtn = document.getElementById('snapshotBtn');
     const fpsEl = document.getElementById('fps');
 
     // ---- Constants ----
@@ -275,14 +275,10 @@
 
     // ---- State ----
     let landmarker = null;
-    let mode = 'write';         // 'laser', 'write', 'mark'
-    let colorMode = 'shape';    // 'shape', 'cyan', 'magenta', 'lime', 'gold'
+    let colorMode = 'cyan';      // 'shape', 'cyan', 'magenta', 'lime', 'gold'
+    let beamStyle = 'glow';      // 'glow', 'solid', 'dashed', 'neon'
     let showParticles = true;
-    let fixedHue = 180;         // cyan default
-
-    // ---- Drawing canvas (persistent) ----
-    const drawCanvas = document.createElement('canvas');
-    const drawCtx = drawCanvas.getContext('2d');
+    let showSkeleton = true;
 
     // ---- Particle system ----
     let particles = [];
@@ -350,49 +346,74 @@
       return ((spread * 180 + curl * 60) % 360 + 360) % 360;
     }
 
-    function getBrushColor(hue) {
+    function getBeamHue(shapeHue) {
       switch (colorMode) {
-        case 'cyan':  return 180;
+        case 'cyan':    return 180;
         case 'magenta': return 300;
-        case 'lime':  return 120;
-        case 'gold':  return 50;
-        default:      return hue; // shape
-      }
-    }
-
-    // ---- Resize drawing canvas to match main canvas ----
-    function resizeDrawCanvas() {
-      const W = cv.width, H = cv.height;
-      if (drawCanvas.width !== W || drawCanvas.height !== H) {
-        drawCanvas.width = W;
-        drawCanvas.height = H;
-        // Copy old content if resizing (we lose it, but we can redraw from scratch – we keep it in memory)
-        // We'll just clear and rely on continuous drawing.
+        case 'lime':    return 120;
+        case 'gold':    return 50;
+        default:        return shapeHue; // 'shape'
       }
     }
 
     // ---- Drawing functions ----
     function drawBeam(x1, y1, x2, y2, hue, width, alpha = 1) {
-      const colHue = getBrushColor(hue);
+      const h = getBeamHue(hue);
+      const style = beamStyle;
       ctx.save();
       ctx.lineCap = 'round';
-      // Glow
-      ctx.strokeStyle = `hsla(${colHue}, 100%, 70%, ${0.15 * alpha})`;
-      ctx.lineWidth = width + 14;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-      // Core
-      ctx.strokeStyle = `hsla(${colHue}, 100%, 80%, ${alpha})`;
-      ctx.lineWidth = width;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
+
+      if (style === 'glow' || style === 'neon') {
+        // Outer glow
+        ctx.strokeStyle = `hsla(${h}, 100%, 70%, ${0.15 * alpha})`;
+        ctx.lineWidth = width + 16;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        // Mid glow
+        ctx.strokeStyle = `hsla(${h}, 100%, 70%, ${0.3 * alpha})`;
+        ctx.lineWidth = width + 8;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        // Core
+        ctx.strokeStyle = `hsla(${h}, 100%, 80%, ${alpha})`;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        if (style === 'neon') {
+          ctx.strokeStyle = `rgba(255,255,255,${0.3 * alpha})`;
+          ctx.lineWidth = Math.max(1, width / 3);
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        }
+      } else if (style === 'solid') {
+        ctx.strokeStyle = `hsla(${h}, 100%, 75%, ${alpha})`;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      } else if (style === 'dashed') {
+        ctx.setLineDash([8, 8]);
+        ctx.strokeStyle = `hsla(${h}, 100%, 75%, ${alpha})`;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
       // Bright dot at origin
-      ctx.fillStyle = `hsla(${colHue}, 100%, 90%, ${alpha})`;
-      ctx.shadowColor = `hsla(${colHue}, 100%, 70%, ${0.5 * alpha})`;
+      ctx.fillStyle = `hsla(${h}, 100%, 90%, ${alpha})`;
+      ctx.shadowColor = `hsla(${h}, 100%, 70%, ${0.5 * alpha})`;
       ctx.shadowBlur = 14;
       ctx.beginPath();
       ctx.arc(x1, y1, width * 0.7, 0, Math.PI * 2);
@@ -401,41 +422,17 @@
       ctx.restore();
     }
 
-    function drawStroke(x, y, hue, size = 4) {
-      const colHue = getBrushColor(hue);
-      drawCtx.save();
-      drawCtx.lineCap = 'round';
-      drawCtx.lineJoin = 'round';
-      drawCtx.strokeStyle = `hsla(${colHue}, 100%, 75%, 0.9)`;
-      drawCtx.lineWidth = size;
-      drawCtx.shadowColor = `hsla(${colHue}, 100%, 70%, 0.4)`;
-      drawCtx.shadowBlur = 12;
-      // We'll use a simple dot for now – continuous drawing is handled per frame
-      drawCtx.beginPath();
-      drawCtx.arc(x, y, size/2, 0, Math.PI*2);
-      drawCtx.fill();
-      drawCtx.shadowBlur = 0;
-      drawCtx.restore();
-    }
-
-    // ---- Clear drawing ----
-    function clearDrawing() {
-      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-    }
-
-    // ---- Export ----
-    function exportCanvas() {
-      // Combine main canvas and draw canvas
-      const temp = document.createElement('canvas');
-      temp.width = cv.width;
-      temp.height = cv.height;
-      const tCtx = temp.getContext('2d');
-      tCtx.drawImage(cv, 0, 0);        // video + overlays
-      tCtx.drawImage(drawCanvas, 0, 0); // drawing layer
-      const link = document.createElement('a');
-      link.download = `evidence-${Date.now()}.png`;
-      link.href = temp.toDataURL('image/png');
-      link.click();
+    function drawSkeleton(lm, W, H, hue) {
+      ctx.save();
+      ctx.strokeStyle = `hsla(${hue}, 80%, 65%, 0.25)`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (const [a, b] of HAND_CONNECTIONS) {
+        ctx.moveTo(lm[a].x * W, lm[a].y * H);
+        ctx.lineTo(lm[b].x * W, lm[b].y * H);
+      }
+      ctx.stroke();
+      ctx.restore();
     }
 
     // ---- Particle spawn ----
@@ -458,15 +455,20 @@
       for (const p of particles) p.draw(ctx);
     }
 
-    // ---- Main render ----
+    // ---- Snapshot ----
+    function takeSnapshot() {
+      const link = document.createElement('a');
+      link.download = `flux-laser-${Date.now()}.png`;
+      link.href = cv.toDataURL('image/png');
+      link.click();
+    }
+
+    // ---- Main render loop ----
     let frameCount = 0;
     let lastFpsTime = performance.now();
     let fps = 0;
     let hands = [];
     let hues = [];
-
-    // Store previous positions for continuous drawing
-    let prevPos = {}; // key: handId_fingerIdx => {x, y}
 
     function render() {
       const W = cv.width, H = cv.height;
@@ -491,110 +493,78 @@
       const mx = (x) => (1 - x) * W;
       const my = (y) => y * H;
 
-      // ---- Mode handling ----
-      if (mode === 'laser') {
-        // Laser beams between hands (similar to original)
-        if (hands.length === 2) {
-          const a = hands[0], b = hands[1];
-          const extA = extendedFingers(a);
-          const extB = extendedFingers(b);
-          const hueAvg = (hues[0] + hues[1]) / 2;
-          const activeTips = TIPS.filter(t => extA[t] && extB[t]);
-          for (let i = 0; i < activeTips.length; i++) {
-            const t = activeTips[i];
-            const x1 = mx(a[t].x), y1 = my(a[t].y);
-            const x2 = mx(b[t].x), y2 = my(b[t].y);
-            drawBeam(x1, y1, x2, y2, (hueAvg + i * 30) % 360, 3);
-            spawnParticles((x1+x2)/2, (y1+y2)/2, (hueAvg + i * 30) % 360, 1);
-          }
-          // cross‑weave, palm beam omitted for brevity but can be added
-        }
-        // Also show skeletons for reference
+      // ---- Draw skeletons ----
+      if (showSkeleton) {
         for (let i = 0; i < hands.length; i++) {
           drawSkeleton(hands[i], W, H, hues[i]);
         }
-      } else if (mode === 'write') {
-        // Dual‑hand writing: each extended finger draws a stroke
-        for (let h = 0; h < hands.length; h++) {
-          const lm = hands[h];
-          const ext = extendedFingers(lm);
-          const hue = hues[h];
-          for (const t of TIPS) {
-            if (ext[t]) {
-              const x = mx(lm[t].x);
-              const y = my(lm[t].y);
-              const key = h + '_' + t;
-              // Draw on persistent canvas
-              drawCtx.save();
-              const col = getBrushColor(hue + (t * 10) % 360);
-              drawCtx.strokeStyle = `hsla(${col}, 100%, 75%, 0.9)`;
-              drawCtx.lineWidth = 4;
-              drawCtx.lineCap = 'round';
-              drawCtx.shadowColor = `hsla(${col}, 100%, 70%, 0.5)`;
-              drawCtx.shadowBlur = 14;
-              if (prevPos[key]) {
-                drawCtx.beginPath();
-                drawCtx.moveTo(prevPos[key].x, prevPos[key].y);
-                drawCtx.lineTo(x, y);
-                drawCtx.stroke();
-              } else {
-                // draw a dot
-                drawCtx.beginPath();
-                drawCtx.arc(x, y, 2.5, 0, Math.PI * 2);
-                drawCtx.fill();
+      }
+
+      // ---- Laser beams (only when two hands) ----
+      if (hands.length === 2) {
+        const a = hands[0], b = hands[1];
+        const extA = extendedFingers(a);
+        const extB = extendedFingers(b);
+        const hueAvg = (hues[0] + hues[1]) / 2;
+
+        // Active tips: extended on both hands
+        const activeTips = TIPS.filter(t => extA[t] && extB[t]);
+
+        // Direct finger‑to‑finger beams
+        for (let i = 0; i < activeTips.length; i++) {
+          const t = activeTips[i];
+          const x1 = mx(a[t].x), y1 = my(a[t].y);
+          const x2 = mx(b[t].x), y2 = my(b[t].y);
+          const beamHue = (hueAvg + i * 30) % 360;
+          drawBeam(x1, y1, x2, y2, beamHue, 3);
+          // Spawn particles at midpoint
+          spawnParticles((x1+x2)/2, (y1+y2)/2, beamHue, 2);
+        }
+
+        // Cross‑weave beams (if >=3 active)
+        if (activeTips.length >= 3) {
+          for (const t1 of activeTips) {
+            for (const t2 of activeTips) {
+              if (t1 === t2) continue;
+              const x1 = mx(a[t1].x), y1 = my(a[t1].y);
+              const x2 = mx(b[t2].x), y2 = my(b[t2].y);
+              const beamHue = (hueAvg + (t1 + t2) * 7) % 360;
+              drawBeam(x1, y1, x2, y2, beamHue, 1.2, 0.45);
+              if (Math.random() < 0.15) {
+                spawnParticles((x1+x2)/2, (y1+y2)/2, beamHue, 1);
               }
-              drawCtx.shadowBlur = 0;
-              drawCtx.restore();
-              // update prev
-              prevPos[key] = { x, y };
-              // spawn particles
-              spawnParticles(x, y, hue + (t * 10) % 360, 1);
-            } else {
-              const key = h + '_' + t;
-              delete prevPos[key]; // reset when finger not extended
             }
           }
         }
-        // Draw the drawing canvas on top
-        ctx.drawImage(drawCanvas, 0, 0);
-        // Skeleton overlay
-        for (let i = 0; i < hands.length; i++) {
-          drawSkeleton(hands[i], W, H, hues[i]);
+
+        // Palm‑to‑palm beam (if >=4 active)
+        if (activeTips.length >= 4) {
+          const x1 = mx(a[9].x), y1 = my(a[9].y);
+          const x2 = mx(b[9].x), y2 = my(b[9].y);
+          drawBeam(x1, y1, x2, y2, hueAvg, 5);
+          spawnParticles((x1+x2)/2, (y1+y2)/2, hueAvg, 4);
         }
-      } else if (mode === 'mark') {
-        // Mark mode: place dots when fingertips are extended (like evidence markers)
-        for (let h = 0; h < hands.length; h++) {
-          const lm = hands[h];
-          const ext = extendedFingers(lm);
-          const hue = hues[h];
-          for (const t of TIPS) {
-            if (ext[t]) {
-              const x = mx(lm[t].x);
-              const y = my(lm[t].y);
-              const col = getBrushColor(hue + (t * 10) % 360);
-              // Draw a glowing dot on the persistent canvas
-              drawCtx.save();
-              drawCtx.shadowColor = `hsla(${col}, 100%, 70%, 0.6)`;
-              drawCtx.shadowBlur = 20;
-              drawCtx.fillStyle = `hsla(${col}, 100%, 80%, 0.9)`;
-              drawCtx.beginPath();
-              drawCtx.arc(x, y, 6, 0, Math.PI * 2);
-              drawCtx.fill();
-              // inner bright core
-              drawCtx.shadowBlur = 0;
-              drawCtx.fillStyle = `hsla(${col}, 100%, 95%, 1)`;
-              drawCtx.beginPath();
-              drawCtx.arc(x, y, 2.5, 0, Math.PI * 2);
-              drawCtx.fill();
-              drawCtx.restore();
-              spawnParticles(x, y, hue + (t * 10) % 360, 2);
-            }
+
+        // Spawn particles from fingertips
+        if (showParticles) {
+          for (const t of activeTips) {
+            spawnParticles(mx(a[t].x), my(a[t].y), hues[0] + (t*10)%360, 1);
+            spawnParticles(mx(b[t].x), my(b[t].y), hues[1] + (t*10)%360, 1);
           }
         }
-        ctx.drawImage(drawCanvas, 0, 0);
-        for (let i = 0; i < hands.length; i++) {
-          drawSkeleton(hands[i], W, H, hues[i]);
-        }
+      } else {
+        // Prompt user
+        const msg = hands.length === 1 ? "show your other hand ✋" : "show both hands to fire beams";
+        ctx.save();
+        const pulse = 0.65 + 0.35 * Math.sin(performance.now() / 350);
+        ctx.font = `600 ${Math.round(H * 0.045)}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(255,255,255,${pulse})`;
+        ctx.shadowColor = 'rgba(120,200,255,0.9)';
+        ctx.shadowBlur = 24;
+        ctx.fillText(msg, W / 2, H * 0.12);
+        ctx.restore();
       }
 
       // ---- Particles ----
@@ -614,24 +584,8 @@
       requestAnimationFrame(render);
     }
 
-    // ---- Skeleton helper (reuse) ----
-    function drawSkeleton(lm, W, H, hue) {
-      ctx.save();
-      ctx.strokeStyle = `hsla(${hue}, 80%, 65%, 0.25)`;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      for (const [a, b] of HAND_CONNECTIONS) {
-        ctx.moveTo(lm[a].x * W, lm[a].y * H);
-        ctx.lineTo(lm[b].x * W, lm[b].y * H);
-      }
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // ---- Resize handler ----
+    // ---- Resize ----
     function resizeCanvas() {
-      const rect = cv.getBoundingClientRect();
-      // We keep canvas size based on video dimensions
       if (video.videoWidth && video.videoHeight) {
         cv.width = video.videoWidth;
         cv.height = video.videoHeight;
@@ -639,33 +593,30 @@
         cv.width = window.innerWidth;
         cv.height = window.innerHeight;
       }
-      // Resize draw canvas
-      resizeDrawCanvas();
-      // Clear drawing if needed? We keep content.
     }
     window.addEventListener('resize', resizeCanvas);
 
-    // ---- UI event listeners ----
-    modeSelect.addEventListener('change', (e) => {
-      mode = e.target.value;
-      // Reset previous positions when switching modes
-      prevPos = {};
-      // If switching to laser, clear drawing? We'll keep it but not draw.
-    });
-
-    brushColorSelect.addEventListener('change', (e) => {
+    // ---- UI events ----
+    beamColorSelect.addEventListener('change', (e) => {
       colorMode = e.target.value;
     });
 
-    clearBtn.addEventListener('click', clearDrawing);
-
-    exportBtn.addEventListener('click', exportCanvas);
+    beamStyleSelect.addEventListener('change', (e) => {
+      beamStyle = e.target.value;
+    });
 
     toggleParticlesBtn.addEventListener('click', () => {
       showParticles = !showParticles;
       toggleParticlesBtn.classList.toggle('active', showParticles);
       if (!showParticles) particles = [];
     });
+
+    toggleSkeletonBtn.addEventListener('click', () => {
+      showSkeleton = !showSkeleton;
+      toggleSkeletonBtn.classList.toggle('active', showSkeleton);
+    });
+
+    snapshotBtn.addEventListener('click', takeSnapshot);
 
     // ---- Initialization ----
     async function initModel() {
@@ -689,9 +640,7 @@
       });
       video.srcObject = stream;
       await video.play();
-      cv.width = video.videoWidth;
-      cv.height = video.videoHeight;
-      resizeDrawCanvas();
+      resizeCanvas();
     }
 
     // ---- Start ----
@@ -707,7 +656,7 @@
       }
     })();
 
-    console.log('FLUX Forensics Lab ready · dual‑hand writing enabled');
+    console.log('FLUX Laser Forensics ready · dual‑hand laser beams with particles');
   </script>
 </body>
 </html>
